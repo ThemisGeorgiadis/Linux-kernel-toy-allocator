@@ -194,13 +194,18 @@ void* toy_alloc(size_t size){
 
         size_t objects_allocated = 0;
 
+        int flag = 1;
+
         for(int i=0; i<OBJS_PER_PAGE; i++){
 
                 if(curr_toy_page->obj_available[i] == 1){
                     curr_toy_page->obj_available[i] = 0;
                     objects_allocated++;
                     if(objects_allocated == objects_needed){
-                        page_offset = i;
+                        if(flag){
+                            page_offset = i;
+                            flag = 0;
+                        }
                         curr_toy_page->free_obj_cnt -= objects_allocated;
                         break;
                     }
