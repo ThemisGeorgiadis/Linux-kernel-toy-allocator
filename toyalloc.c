@@ -6,9 +6,10 @@
 #include <linux/sched/mm.h>
 #include <linux/highmem.h>
 #include <linux/types.h>
+#include <linux/hugetlb.h>
 
 #define OBJ_SIZE 64
-#define OBJS_PER_PAGE 64
+#define OBJS_PER_PAGE (PAGE_SIZE/OBJ_SIZE)
 
 //64byte objects;
 
@@ -41,8 +42,20 @@ struct toy_alloc_metadata{
 } t_alloc_metadata;
 
 struct toy_page* new_toy_page(void);
+
 void init_toy_allocator(void);
+
 void* toy_alloc(size_t size);
+
+unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_needed, unsigned long start_obj);
+
+unsigned long check_continuity(struct toy_page **curr_toy_page, size_t objects_needed);
+
+void toy_free(void* ptr);
+
+void print_toy_allocator_state(void);
+
+
 
 struct toy_page* new_toy_page(){
 
@@ -75,14 +88,14 @@ void init_toy_allocator(void){
 
 }
 
-unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_needed);
 
-unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_needed){
+
+unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_needed, unsigned long start_obj){
 
     size_t objects_allocated = 0, page_offset = -1;
     int flag = 1;
 
-    for(int i=0; i<OBJS_PER_PAGE; i++){
+    for(int i=start_obj; i<OBJS_PER_PAGE; i++){
 
                 if((*curr_toy_page)->obj_available[i] == 1){
 
@@ -104,40 +117,34 @@ unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_neede
     return page_offset;
 }
 
-int check_continuity(struct toy_page **curr_toy_page, size_t objects_needed);
 
-int check_continuity(struct toy_page **curr_toy_page, size_t objects_needed){
+unsigned long check_continuity(struct toy_page **curr_toy_page, size_t objects_needed)
+{
+    size_t run = 0;
+    unsigned long start = 0;
 
-    int countcont = 0, countoccupied = 0;
+    for (int i = 0; i < OBJS_PER_PAGE; i++) {
 
-    for(int i=0; i<OBJS_PER_PAGE; i++){
+        if ((*curr_toy_page)->obj_available[i]) {
 
-        countcont++;
+            if (run == 0)
+                start = i;
 
-        if((*curr_toy_page)->obj_available[i] == 0)
-            countcont = 0;
-        else
-            countoccupied++;
+            run++;
 
+            if (run == objects_needed)
+                return start;
 
-        if(OBJS_PER_PAGE - i  == objects_needed && !countcont)
-            return 0;
+        } else {
 
-        if(OBJS_PER_PAGE - i  == objects_needed && countoccupied < OBJS_PER_PAGE - (*curr_toy_page)->free_obj_cnt)
-            return 0;
-        
-        if(OBJS_PER_PAGE - i  == objects_needed && countcont && countoccupied >= OBJS_PER_PAGE - (*curr_toy_page)->free_obj_cnt)
-            return 1;
-            
+            run = 0;
+
+        }
     }
 
-    if(countcont >= objects_needed)
-        return 1;
-    else
-        return 0;
-
+    return -1;
 }
-void toy_free(void* ptr);
+
 void toy_free(void* ptr){
 
     if(!t_alloc_metadata.toy_pages_count)
@@ -182,7 +189,7 @@ void* toy_alloc(size_t size){
     struct toy_page *curr_toy_page;
 
     unsigned long page_offset = 0;
-    int allocated = 0;
+    int allocated = 0, start_obj = 0;
 
     //is there a page with free objects?
     if(t_alloc_metadata.toy_pages_count){
@@ -195,14 +202,17 @@ void* toy_alloc(size_t size){
 
             curr_toy_page = curr_page_l->page;
 
-            if(!(curr_toy_page->free_obj_cnt >= objects_needed && check_continuity(&curr_toy_page,objects_needed))){
+            start_obj = check_continuity(&curr_toy_page,objects_needed);
+
+            if(!(curr_toy_page->free_obj_cnt >= objects_needed &&
+                 start_obj != -1)){
 
                 curr_page_l = curr_page_l->next;
                 continue;
 
             }
 
-            page_offset = mark_objects(&curr_toy_page,objects_needed);
+            page_offset = mark_objects(&curr_toy_page,objects_needed,start_obj);
 
             if (((long)page_offset) != -1){
 
@@ -226,12 +236,13 @@ void* toy_alloc(size_t size){
                 return NULL;
 
             prev_page_l->next->next = NULL;
+            t_alloc_metadata.toy_pages_count++;
             curr_page_l = prev_page_l->next;
 
             curr_page_l->page = new_toy_page();
             curr_toy_page = curr_page_l->page;
 
-            page_offset = mark_objects(&curr_toy_page,objects_needed);
+            page_offset = mark_objects(&curr_toy_page,objects_needed,0);
 
             if (((long)page_offset) != -1){
 
@@ -254,7 +265,7 @@ void* toy_alloc(size_t size){
         t_alloc_metadata.head->next = NULL;
         t_alloc_metadata.toy_pages_count = 1;
 
-        page_offset = mark_objects(&curr_toy_page,objects_needed);
+        page_offset = mark_objects(&curr_toy_page,objects_needed,0);
 
         if (((long)page_offset) != -1){
 
@@ -279,7 +290,6 @@ void* toy_alloc(size_t size){
 }
 
 
-void print_toy_allocator_state(void);
 
 void print_toy_allocator_state(void)
 {
@@ -330,7 +340,6 @@ void print_toy_allocator_state(void)
 
 SYSCALL_DEFINE2(taskinspect, unsigned int, val, unsigned int, size){
 
-
     if(!toy_allocator_initialized){
         init_toy_allocator();
     }
@@ -341,11 +350,35 @@ SYSCALL_DEFINE2(taskinspect, unsigned int, val, unsigned int, size){
 
     pr_info("value: %d\n",*integer);
 
+    int *integer1 = (int*)toy_alloc(4*OBJ_SIZE);
+    int *integer2 = (int*)toy_alloc(2*OBJ_SIZE);
+
     print_toy_allocator_state();
 
-    if(val){toy_free((void*)integer);
+    toy_free((void*)integer1);
 
-    print_toy_allocator_state();}
+    print_toy_allocator_state();
+
+    int *integer3 = (int*)toy_alloc(2*OBJ_SIZE);
+
+    print_toy_allocator_state();
+
+    int *integer4 = (int*)toy_alloc(2*OBJ_SIZE);
+
+    print_toy_allocator_state();
+
+    if(val){
+        toy_free((void*)integer);
+
+        print_toy_allocator_state();
+    }
+
+    *integer1 = 1; //now points to the same place as integer3 because the object was freed and reclaimed
+    *integer2 = 2;
+    *integer3 = 3;
+    *integer4 = 4;
+
+    pr_alert("%d %d %d %d\n",*integer1,*integer2,*integer3,*integer4); //should print 3 2 3 4
 
 
     return val;
