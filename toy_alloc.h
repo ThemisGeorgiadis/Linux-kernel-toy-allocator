@@ -1,0 +1,57 @@
+#include <linux/kernel.h>
+#include <linux/syscalls.h>
+#include <linux/sched.h>
+#include <linux/mm.h>
+#include <linux/mm_types.h>
+#include <linux/sched/mm.h>
+#include <linux/highmem.h>
+#include <linux/types.h>
+#include <linux/vmalloc.h>
+
+#define OBJ_SIZE 64
+#define OBJS_PER_PAGE (PAGE_SIZE/OBJ_SIZE)
+
+
+struct toy_pages_list;
+
+struct toy_page{
+
+    void *kaddr;
+    unsigned int page_mapped;
+    struct page *page;
+    unsigned int free_obj_cnt;
+    struct toy_pages_list *head;
+    //No freelist yet
+    unsigned int obj_available[OBJS_PER_PAGE];
+    unsigned int obj_alloc_length[OBJS_PER_PAGE];
+
+};
+
+struct toy_pages_list{
+
+    struct toy_page *page;
+    struct toy_pages_list *next;
+
+};
+
+struct toy_alloc_metadata{
+    unsigned int toy_pages_count;
+    struct toy_pages_list *head;
+
+} t_alloc_metadata;
+
+int toy_allocator_initialized = 0;
+
+struct toy_page* new_toy_page(void);
+
+void init_toy_allocator(void);
+
+void* toy_alloc(size_t size);
+
+unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_needed, unsigned long start_obj);
+
+unsigned long check_continuity(struct toy_page **curr_toy_page, size_t objects_needed);
+
+void toy_free(void* ptr);
+
+void print_toy_allocator_state(void);
