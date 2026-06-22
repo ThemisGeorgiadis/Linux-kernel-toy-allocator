@@ -7,6 +7,7 @@
 #include <linux/highmem.h>
 #include <linux/types.h>
 #include <linux/hugetlb.h>
+#include <linux/vmalloc.h>
 
 #define OBJ_SIZE 64
 #define OBJS_PER_PAGE (PAGE_SIZE/OBJ_SIZE)
@@ -177,8 +178,21 @@ void toy_free(void* ptr){
 
 void* toy_alloc(size_t size){
 
+    //NEED MULTIPLE PAGES FLAG
+    int m_pages_flag = 0;
+    unsigned long pages_needed = 1;
+
     if(!size)
         return NULL;
+
+    if(size > PAGE_SIZE){
+        m_pages_flag = 1;   
+        pages_needed = size/PAGE_SIZE + 1;
+
+        if(size%PAGE_SIZE == 0)
+            pages_needed--;
+    }
+
 
     size_t objects_needed = size/OBJ_SIZE + 1;
     if(size%OBJ_SIZE == 0)
@@ -186,40 +200,137 @@ void* toy_alloc(size_t size){
 
     struct toy_pages_list *curr_page_l = NULL;
     struct toy_pages_list *prev_page_l = NULL;
+    struct toy_pages_list *saved_l = NULL;
     struct toy_page *curr_toy_page;
+    struct toy_page *first_page;
 
     unsigned long page_offset = 0;
-    int allocated = 0, start_obj = 0;
+    int allocated = 0, start_obj = 0, could_alloc_current = 0;;
 
     //is there a page with free objects?
     if(t_alloc_metadata.toy_pages_count){
 
         curr_page_l = t_alloc_metadata.head;
 
+        //Try to allocate on existing pages
         while(curr_page_l){
+
+            could_alloc_current = 0;
 
             prev_page_l = curr_page_l;
 
             curr_toy_page = curr_page_l->page;
 
-            start_obj = check_continuity(&curr_toy_page,objects_needed);
-
-            if(!(curr_toy_page->free_obj_cnt >= objects_needed &&
-                 start_obj != -1)){
+            //If size doesnt fit skip to the next page
+            if(m_pages_flag && curr_toy_page->free_obj_cnt < OBJS_PER_PAGE){
 
                 curr_page_l = curr_page_l->next;
                 continue;
 
+
+            //If size fits check the next page
+            }else if(m_pages_flag){
+
+                could_alloc_current += PAGE_SIZE;
+                struct toy_pages_list *next_tmp = curr_page_l->next;
+
+                while(next_tmp){
+
+                    //We need contiguous, completely free pages
+                    if(next_tmp->page &&
+                        next_tmp->page->free_obj_cnt < OBJS_PER_PAGE)
+                    {
+
+                        curr_page_l = curr_page_l->next;
+                        break;
+
+                    }else{
+
+                        could_alloc_current += PAGE_SIZE;
+
+                        if(could_alloc_current >= size)
+                            break;
+
+                        next_tmp = next_tmp->next;
+                    }
+                }
+
             }
 
-            page_offset = mark_objects(&curr_toy_page,objects_needed,start_obj);
+            if(!m_pages_flag){
+                start_obj = check_continuity(&curr_toy_page,objects_needed);
+
+                if(!(curr_toy_page->free_obj_cnt >= objects_needed &&
+                     start_obj != -1)){
+
+                    curr_page_l = curr_page_l->next;
+                    continue;
+
+                }
+
+            }else{
+                
+                //Failed to find contiguous, completely free pages
+                if(!(could_alloc_current >= size)){
+                    curr_page_l = curr_page_l->next;
+                    continue;
+                }
+                    
+            }
+
+            struct toy_pages_list *saved_curr = curr_page_l;
+            could_alloc_current = 0;
+            unsigned long remaining = objects_needed;
+            int flag = 1;
+
+            for(int i = 0; i<pages_needed; i++){
+
+                if(remaining > OBJS_PER_PAGE){
+                    remaining -= OBJS_PER_PAGE;
+                    could_alloc_current = OBJS_PER_PAGE;
+                }else
+                    could_alloc_current = remaining;
+
+                unsigned long tmp_off = mark_objects(&curr_page_l->page,could_alloc_current,start_obj);
+                if(flag){
+
+                        page_offset = tmp_off;
+                        flag = 0;
+                        saved_l = curr_page_l;
+                    }
+
+                curr_page_l = curr_page_l->next;
+            }
+
+            curr_page_l = saved_curr;
+            curr_toy_page = curr_page_l->page;
+            
+            could_alloc_current = 0;
+            remaining = objects_needed;
 
             if (((long)page_offset) != -1){
 
                 curr_toy_page->obj_alloc_length[page_offset] = objects_needed;
 
-                curr_toy_page->free_obj_cnt -= objects_needed;
-                allocated = 1;
+                 for(int i = 0; i<pages_needed; i++){
+
+                    if(remaining > OBJS_PER_PAGE){
+
+                        remaining -= OBJS_PER_PAGE;
+                        could_alloc_current = OBJS_PER_PAGE;
+
+                        saved_curr->page->free_obj_cnt -= could_alloc_current;
+
+                    }else{
+
+                        allocated = 1;
+                        could_alloc_current = remaining;
+                        saved_curr->page->free_obj_cnt -= could_alloc_current;
+                    }
+
+                    saved_curr = saved_curr->next;
+
+                 }
 
                 break;
             }
@@ -228,61 +339,163 @@ void* toy_alloc(size_t size){
 
         }
 
-        if(!curr_page_l && !allocated){
+        could_alloc_current = 0;
+        unsigned long remaining = objects_needed;
+        int flag = 1;
 
-            prev_page_l->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+        //No free, already allocated, pages found -> allocate new ones
+        if(!allocated){ //!curr_page_l &&
+            
+            for(int i = 0; i<pages_needed; i++){
 
-            if (!prev_page_l->next)
-                return NULL;
+                prev_page_l->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
 
-            prev_page_l->next->next = NULL;
-            t_alloc_metadata.toy_pages_count++;
-            curr_page_l = prev_page_l->next;
+                if (!prev_page_l->next)
+                    return NULL;
 
-            curr_page_l->page = new_toy_page();
-            curr_toy_page = curr_page_l->page;
+                prev_page_l->next->next = NULL;
+                t_alloc_metadata.toy_pages_count++;
+                curr_page_l = prev_page_l->next;
 
-            page_offset = mark_objects(&curr_toy_page,objects_needed,0);
+                curr_page_l->page = new_toy_page();
+                curr_toy_page = curr_page_l->page;
 
-            if (((long)page_offset) != -1){
+                if(flag){
+                    first_page = curr_toy_page;
+                    saved_l = curr_page_l;
+                }
 
-                curr_toy_page->obj_alloc_length[page_offset] = objects_needed;
+                if(remaining > OBJS_PER_PAGE){
+                    remaining -= OBJS_PER_PAGE;
+                    could_alloc_current = OBJS_PER_PAGE;
+                }else
+                    could_alloc_current = remaining;
 
-                curr_toy_page->free_obj_cnt -= objects_needed;
+                page_offset = mark_objects(&curr_toy_page,could_alloc_current,0);
+
+                if (((long)page_offset) != -1){
+
+                    if(flag){
+                        curr_toy_page->obj_alloc_length[0] = objects_needed;
+                        flag = 0;
+                    }
+
+                    curr_toy_page->free_obj_cnt -= could_alloc_current;
+
+                }
+
+                prev_page_l = curr_page_l;
 
             }
 
+            curr_toy_page = first_page;
+
         }
 
         
 
+    //No pages allocated from buddy yet
     }else{
 
-        t_alloc_metadata.head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
-        t_alloc_metadata.head->page = new_toy_page();
-        
-        curr_toy_page = t_alloc_metadata.head->page;
-        t_alloc_metadata.head->next = NULL;
-        t_alloc_metadata.toy_pages_count = 1;
+    struct toy_pages_list *head;
+    struct toy_pages_list *curr;
+    
+    int flag = 1;
+    unsigned long remaining = objects_needed;
 
-        page_offset = mark_objects(&curr_toy_page,objects_needed,0);
+    head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+    if (!head)
+        return NULL;
 
-        if (((long)page_offset) != -1){
+    t_alloc_metadata.head = head;
+    curr = head;
 
-            curr_toy_page->obj_alloc_length[page_offset] = objects_needed;
+    for(int i = 0; i < pages_needed; i++){
 
-            curr_toy_page->free_obj_cnt -= objects_needed;
+        curr->page = new_toy_page();
+
+        if(flag){
+            first_page = curr->page;
+            saved_l = curr;
 
         }
 
+        curr_toy_page = curr->page;
+        t_alloc_metadata.toy_pages_count++;
+
+        if(remaining > OBJS_PER_PAGE){
+            remaining -= OBJS_PER_PAGE;
+            could_alloc_current = OBJS_PER_PAGE;
+        }else{
+            could_alloc_current = remaining;
+        }
+
+        page_offset = mark_objects(&curr_toy_page, could_alloc_current, 0);
+
+        if(((long)page_offset) != -1){
+
+            if(flag){
+                curr_toy_page->obj_alloc_length[0] = objects_needed;
+                flag = 0;
+            }
+
+            curr_toy_page->free_obj_cnt -= could_alloc_current;
+        }
+
+        if(i + 1 < pages_needed){
+
+            curr->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+            if(!curr->next)
+                return NULL;
+
+            curr = curr->next;
+
+        }else{
+
+            curr->next = NULL;
+
+        }
     }
 
-    void *kaddr = curr_toy_page->kaddr;
-    if (!curr_toy_page->page_mapped || !curr_toy_page->kaddr) {
-        //NOTE: should use vmap
-        kaddr = kmap_local_page(curr_toy_page->page);
-        curr_toy_page->page_mapped = 1;
-        curr_toy_page->kaddr = kaddr;
+    curr_toy_page = first_page;
+
+}
+
+    struct page **pages;
+    struct toy_pages_list *tmp = saved_l;
+
+    pages = (struct page**)kmalloc_array(pages_needed, sizeof(*pages), GFP_KERNEL);
+
+    for(int i = 0; i < pages_needed; i++){
+
+        if(tmp->page->page_mapped &&
+             m_pages_flag){
+
+            kunmap_local(tmp->page->kaddr);
+            tmp->page->page_mapped = 0;
+        }
+
+        pages[i] = tmp->page->page;
+        tmp = tmp->next;
+    }
+
+
+    void *kaddr = saved_l->page->kaddr;
+
+    tmp = saved_l;
+
+    
+
+    if (!saved_l->page->page_mapped || !saved_l->page->kaddr){
+        kaddr = vmap(pages, pages_needed, VM_MAP, PAGE_KERNEL);
+
+        for(int i = 0; i < pages_needed; i++){
+            tmp->page->page_mapped = 1;
+            tmp->page->kaddr = kaddr + i * PAGE_SIZE;
+
+            tmp = tmp->next;
+        }
+
     }
 
     return (void *)((char *)kaddr + page_offset * OBJ_SIZE);
@@ -344,41 +557,53 @@ SYSCALL_DEFINE2(taskinspect, unsigned int, val, unsigned int, size){
         init_toy_allocator();
     }
 
-    int *integer = (int*)toy_alloc(size);
+    //int *integer = (int*)toy_alloc(size);
 
-    *integer = 4;
+    //*integer = 4;
 
-    pr_info("value: %d\n",*integer);
+    //pr_info("value: %d\n",*integer);
 
-    int *integer1 = (int*)toy_alloc(4*OBJ_SIZE);
-    int *integer2 = (int*)toy_alloc(2*OBJ_SIZE);
+    int *integer1 = (int*)toy_alloc(2*PAGE_SIZE);
+    int *integer3 = (int*)toy_alloc(PAGE_SIZE);
 
-    print_toy_allocator_state();
+    //toy_free((void*)integer1);
+    //toy_free((void*)integer3);
 
-    toy_free((void*)integer1);
+    int *integer2 = (int*)toy_alloc((2 * PAGE_SIZE) - OBJ_SIZE);
 
-    print_toy_allocator_state();
+    
 
-    int *integer3 = (int*)toy_alloc(2*OBJ_SIZE);
+    *integer1 = 67;
+    *integer2 = 62;
 
-    print_toy_allocator_state();
+    pr_alert("%d %d %d\n",*integer1,*integer2,*integer3);
 
-    int *integer4 = (int*)toy_alloc(2*OBJ_SIZE);
+   print_toy_allocator_state();
 
-    print_toy_allocator_state();
+   //toy_free((void*)integer1);
 
-    if(val){
-        toy_free((void*)integer);
+   //print_toy_allocator_state();
 
-        print_toy_allocator_state();
-    }
+   //int *integer3 = (int*)toy_alloc(2*OBJ_SIZE);
 
-    *integer1 = 1; //now points to the same place as integer3 because the object was freed and reclaimed
-    *integer2 = 2;
-    *integer3 = 3;
-    *integer4 = 4;
+   //print_toy_allocator_state();
 
-    pr_alert("%d %d %d %d\n",*integer1,*integer2,*integer3,*integer4); //should print 3 2 3 4
+   //int *integer4 = (int*)toy_alloc(2*OBJ_SIZE);
+
+   //print_toy_allocator_state();
+
+   //if(val){
+   //    toy_free((void*)integer);
+
+   //    print_toy_allocator_state();
+   //}
+
+   //*integer1 = 1; //now points to the same place as integer3 because the object was freed and reclaimed
+   //*integer2 = 2;
+   //*integer3 = 3;
+   //*integer4 = 4;
+
+   //pr_alert("%d %d %d %d\n",*integer1,*integer2,*integer3,*integer4); //should print 3 2 3 4
 
 
     return val;
