@@ -154,7 +154,7 @@ void toy_free(void* ptr){
     struct toy_pages_list * curr_page_l = t_alloc_metadata.head;
 
     while(curr_page_l){
-        printk("%px - %px : %px\n", curr_page_l->page->kaddr, curr_page_l->page->kaddr + PAGE_SIZE, ptr);
+        //printk("%px - %px : %px\n", curr_page_l->page->kaddr, curr_page_l->page->kaddr + PAGE_SIZE, ptr);
         if(ptr >= curr_page_l->page->kaddr && ptr < curr_page_l->page->kaddr + PAGE_SIZE){
             break;
         }
@@ -162,15 +162,37 @@ void toy_free(void* ptr){
     }
 
     if(curr_page_l){
+
         unsigned long page_offset = (ptr - curr_page_l->page->kaddr)/OBJ_SIZE;
         int obj_freed_count = curr_page_l->page->obj_alloc_length[page_offset];
 
-        curr_page_l->page->obj_alloc_length[page_offset] = 0;
-        curr_page_l->page->free_obj_cnt += obj_freed_count;
+        unsigned long pages_count = obj_freed_count / OBJS_PER_PAGE + 1;
+        if(obj_freed_count%OBJS_PER_PAGE == 0)
+            pages_count--;
 
-        for(int i=0; i<obj_freed_count; i++){
-            curr_page_l->page->obj_available[page_offset + i] = 1;
+        unsigned long remaining = obj_freed_count;
+        int current_count = 0;
+
+        for(int i=0; i<pages_count; i++){
+
+            if(remaining > OBJS_PER_PAGE){
+                    remaining -= OBJS_PER_PAGE;
+                    current_count = OBJS_PER_PAGE;
+                }else
+                    current_count = remaining;
+            
+            curr_page_l->page->obj_alloc_length[page_offset] = 0;
+            curr_page_l->page->free_obj_cnt += current_count;
+
+            for(int i=0; i<current_count; i++)
+                curr_page_l->page->obj_available[page_offset + i] = 1;
+            
+            
+            curr_page_l = curr_page_l->next;
+
+
         }
+
         
     }
 
@@ -564,46 +586,25 @@ SYSCALL_DEFINE2(taskinspect, unsigned int, val, unsigned int, size){
     //pr_info("value: %d\n",*integer);
 
     int *integer1 = (int*)toy_alloc(2*PAGE_SIZE);
-    int *integer3 = (int*)toy_alloc(PAGE_SIZE);
+    int *integer2 = (int*)toy_alloc(PAGE_SIZE);
 
-    //toy_free((void*)integer1);
-    //toy_free((void*)integer3);
+    print_toy_allocator_state();
 
-    int *integer2 = (int*)toy_alloc((2 * PAGE_SIZE) - OBJ_SIZE);
+    toy_free((void*)integer1);
 
-    
+    print_toy_allocator_state();
 
-    *integer1 = 67;
-    *integer2 = 62;
+    int *integer3 = (int*)toy_alloc(PAGE_SIZE/2);
+    int *integer4 = (int*)toy_alloc(PAGE_SIZE/2);
 
-    pr_alert("%d %d %d\n",*integer1,*integer2,*integer3);
+    print_toy_allocator_state();
 
-   print_toy_allocator_state();
+   *integer1 = 67;
+   *integer2 = 62;
 
-   //toy_free((void*)integer1);
+   pr_alert("%d %d %d %d\n",*integer1,*integer2,*integer3,*integer4);
 
-   //print_toy_allocator_state();
-
-   //int *integer3 = (int*)toy_alloc(2*OBJ_SIZE);
-
-   //print_toy_allocator_state();
-
-   //int *integer4 = (int*)toy_alloc(2*OBJ_SIZE);
-
-   //print_toy_allocator_state();
-
-   //if(val){
-   //    toy_free((void*)integer);
-
-   //    print_toy_allocator_state();
-   //}
-
-   //*integer1 = 1; //now points to the same place as integer3 because the object was freed and reclaimed
-   //*integer2 = 2;
-   //*integer3 = 3;
-   //*integer4 = 4;
-
-   //pr_alert("%d %d %d %d\n",*integer1,*integer2,*integer3,*integer4); //should print 3 2 3 4
+  //print_toy_allocator_state();
 
 
     return val;
