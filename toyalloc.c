@@ -116,10 +116,12 @@ void toy_free(void* ptr){
         for(int i=0; i<pages_count; i++){
 
             if(remaining > OBJS_PER_PAGE){
-                    remaining -= OBJS_PER_PAGE;
-                    current_count = OBJS_PER_PAGE;
-                }else
-                    current_count = remaining;
+
+                remaining -= OBJS_PER_PAGE;
+                current_count = OBJS_PER_PAGE;
+
+            }else
+                current_count = remaining;
             
             curr_page_l->page->obj_alloc_length[page_offset] = 0;
             curr_page_l->page->free_obj_cnt += current_count;
@@ -141,8 +143,19 @@ void toy_free(void* ptr){
 void* toy_alloc(size_t size){
 
     //NEED MULTIPLE PAGES FLAG
-    int m_pages_flag = 0;
+    int m_pages_flag = 0, flag = 1;
     unsigned long pages_needed = 1;
+
+    unsigned long page_offset = 0, remaining = 0;
+    unsigned long allocated = 0, start_obj = 0, curr_obj_sz_sum = 0;
+
+    struct toy_pages_list *curr_page_l = NULL;
+    struct toy_pages_list *prev_page_l = NULL;
+    struct toy_pages_list *saved_l = NULL;
+    struct toy_pages_list *temp_node = NULL;
+    struct toy_page *curr_toy_page;
+    struct toy_page *first_page;
+    size_t objects_needed;
 
     if(!size)
         return NULL;
@@ -156,32 +169,23 @@ void* toy_alloc(size_t size){
     }
 
 
-    size_t objects_needed = size/OBJ_SIZE + 1;
+    objects_needed = size/OBJ_SIZE + 1;
     if(size%OBJ_SIZE == 0)
         objects_needed--;
 
-    struct toy_pages_list *curr_page_l = NULL;
-    struct toy_pages_list *prev_page_l = NULL;
-    struct toy_pages_list *saved_l = NULL;
-    struct toy_page *curr_toy_page;
-    struct toy_page *first_page;
 
-    unsigned long page_offset = 0;
-    int allocated = 0, start_obj = 0, could_alloc_current = 0;;
-
-    //is there a page with free objects?
-    if(t_alloc_metadata.toy_pages_count){
+    //check if we could we could possibly fit the allocation in already allocated pages
+    if(t_alloc_metadata.toy_pages_count >= pages_needed){
 
         curr_page_l = t_alloc_metadata.head;
 
         //Try to allocate on existing pages
         while(curr_page_l){
 
-            could_alloc_current = 0;
-
             prev_page_l = curr_page_l;
-
             curr_toy_page = curr_page_l->page;
+
+            curr_obj_sz_sum = 0;
 
             //If size doesnt fit skip to the next page
             if(m_pages_flag && curr_toy_page->free_obj_cnt < OBJS_PER_PAGE){
@@ -189,18 +193,17 @@ void* toy_alloc(size_t size){
                 curr_page_l = curr_page_l->next;
                 continue;
 
-
             //If size fits check the next page
             }else if(m_pages_flag){
 
-                could_alloc_current += PAGE_SIZE;
-                struct toy_pages_list *next_tmp = curr_page_l->next;
+                curr_obj_sz_sum += PAGE_SIZE;
+                temp_node = curr_page_l->next;
 
-                while(next_tmp){
+                while(temp_node){
 
                     //We need contiguous, completely free pages
-                    if(next_tmp->page &&
-                        next_tmp->page->free_obj_cnt < OBJS_PER_PAGE)
+                    if(temp_node->page &&
+                        temp_node->page->free_obj_cnt < OBJS_PER_PAGE)
                     {
 
                         curr_page_l = curr_page_l->next;
@@ -208,17 +211,18 @@ void* toy_alloc(size_t size){
 
                     }else{
 
-                        could_alloc_current += PAGE_SIZE;
+                        curr_obj_sz_sum += PAGE_SIZE;
 
-                        if(could_alloc_current >= size)
+                        if(curr_obj_sz_sum >= size)
                             break;
 
-                        next_tmp = next_tmp->next;
+                        temp_node = temp_node->next;
                     }
                 }
 
             }
 
+            //Check if we found contiguous allocation area
             if(!m_pages_flag){
                 start_obj = check_continuity(&curr_toy_page,objects_needed);
 
@@ -233,27 +237,28 @@ void* toy_alloc(size_t size){
             }else{
                 
                 //Failed to find contiguous, completely free pages
-                if(!(could_alloc_current >= size)){
+                if(!(curr_obj_sz_sum >= size)){
                     curr_page_l = curr_page_l->next;
                     continue;
                 }
                     
             }
 
-            struct toy_pages_list *saved_curr = curr_page_l;
-            could_alloc_current = 0;
-            unsigned long remaining = objects_needed;
-            int flag = 1;
+            temp_node = curr_page_l;
+            curr_obj_sz_sum = 0;
+            remaining = objects_needed;
+            flag = 1;
 
             for(int i = 0; i<pages_needed; i++){
 
                 if(remaining > OBJS_PER_PAGE){
                     remaining -= OBJS_PER_PAGE;
-                    could_alloc_current = OBJS_PER_PAGE;
+                    curr_obj_sz_sum = OBJS_PER_PAGE;
                 }else
-                    could_alloc_current = remaining;
+                    curr_obj_sz_sum = remaining;
 
-                unsigned long tmp_off = mark_objects(&curr_page_l->page,could_alloc_current,start_obj);
+                unsigned long tmp_off = mark_objects(&curr_page_l->page,curr_obj_sz_sum,start_obj);
+
                 if(flag){
 
                         page_offset = tmp_off;
@@ -264,10 +269,10 @@ void* toy_alloc(size_t size){
                 curr_page_l = curr_page_l->next;
             }
 
-            curr_page_l = saved_curr;
+            curr_page_l = temp_node;
             curr_toy_page = curr_page_l->page;
             
-            could_alloc_current = 0;
+            curr_obj_sz_sum = 0;
             remaining = objects_needed;
 
             if (((long)page_offset) != -1){
@@ -279,18 +284,18 @@ void* toy_alloc(size_t size){
                     if(remaining > OBJS_PER_PAGE){
 
                         remaining -= OBJS_PER_PAGE;
-                        could_alloc_current = OBJS_PER_PAGE;
+                        curr_obj_sz_sum = OBJS_PER_PAGE;
 
-                        saved_curr->page->free_obj_cnt -= could_alloc_current;
+                        temp_node->page->free_obj_cnt -= curr_obj_sz_sum;
 
                     }else{
 
                         allocated = 1;
-                        could_alloc_current = remaining;
-                        saved_curr->page->free_obj_cnt -= could_alloc_current;
+                        curr_obj_sz_sum = remaining;
+                        temp_node->page->free_obj_cnt -= curr_obj_sz_sum;
                     }
 
-                    saved_curr = saved_curr->next;
+                    temp_node = temp_node->next;
 
                  }
 
@@ -301,9 +306,9 @@ void* toy_alloc(size_t size){
 
         }
 
-        could_alloc_current = 0;
-        unsigned long remaining = objects_needed;
-        int flag = 1;
+        curr_obj_sz_sum = 0;
+        remaining = objects_needed;
+        flag = 1;
 
         //No free, already allocated, pages found -> allocate new ones
         if(!allocated){ //!curr_page_l &&
@@ -329,11 +334,11 @@ void* toy_alloc(size_t size){
 
                 if(remaining > OBJS_PER_PAGE){
                     remaining -= OBJS_PER_PAGE;
-                    could_alloc_current = OBJS_PER_PAGE;
+                    curr_obj_sz_sum = OBJS_PER_PAGE;
                 }else
-                    could_alloc_current = remaining;
+                    curr_obj_sz_sum = remaining;
 
-                page_offset = mark_objects(&curr_toy_page,could_alloc_current,0);
+                page_offset = mark_objects(&curr_toy_page,curr_obj_sz_sum,0);
 
                 if (((long)page_offset) != -1){
 
@@ -342,7 +347,7 @@ void* toy_alloc(size_t size){
                         flag = 0;
                     }
 
-                    curr_toy_page->free_obj_cnt -= could_alloc_current;
+                    curr_toy_page->free_obj_cnt -= curr_obj_sz_sum;
 
                 }
 
@@ -354,108 +359,109 @@ void* toy_alloc(size_t size){
 
         }
 
-        
-
     //No pages allocated from buddy yet
     }else{
 
-    struct toy_pages_list *head;
-    struct toy_pages_list *curr;
-    
-    int flag = 1;
-    unsigned long remaining = objects_needed;
+        struct toy_pages_list *head;
+        struct toy_pages_list *curr;
+        
+        flag = 1;
+        remaining = objects_needed;
 
-    head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
-    if (!head)
-        return NULL;
+        head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
 
-    t_alloc_metadata.head = head;
-    curr = head;
+        if (!head)
+            return NULL;
 
-    for(int i = 0; i < pages_needed; i++){
+        t_alloc_metadata.head = head;
+        curr = head;
 
-        curr->page = new_toy_page();
+        for(int i = 0; i < pages_needed; i++){
 
-        if(flag){
-            first_page = curr->page;
-            saved_l = curr;
-
-        }
-
-        curr_toy_page = curr->page;
-        t_alloc_metadata.toy_pages_count++;
-
-        if(remaining > OBJS_PER_PAGE){
-            remaining -= OBJS_PER_PAGE;
-            could_alloc_current = OBJS_PER_PAGE;
-        }else{
-            could_alloc_current = remaining;
-        }
-
-        page_offset = mark_objects(&curr_toy_page, could_alloc_current, 0);
-
-        if(((long)page_offset) != -1){
+            curr->page = new_toy_page();
 
             if(flag){
-                curr_toy_page->obj_alloc_length[0] = objects_needed;
-                flag = 0;
+                first_page = curr->page;
+                saved_l = curr;
+
             }
 
-            curr_toy_page->free_obj_cnt -= could_alloc_current;
+            curr_toy_page = curr->page;
+            t_alloc_metadata.toy_pages_count++;
+
+            if(remaining > OBJS_PER_PAGE){
+                remaining -= OBJS_PER_PAGE;
+                curr_obj_sz_sum = OBJS_PER_PAGE;
+            }else{
+                curr_obj_sz_sum = remaining;
+            }
+
+            page_offset = mark_objects(&curr_toy_page, curr_obj_sz_sum, 0);
+
+            if(((long)page_offset) != -1){
+
+                if(flag){
+                    curr_toy_page->obj_alloc_length[0] = objects_needed;
+                    flag = 0;
+                }
+
+                curr_toy_page->free_obj_cnt -= curr_obj_sz_sum;
+            }
+
+            if(i + 1 < pages_needed){
+
+                curr->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+                if(!curr->next)
+                    return NULL;
+
+                curr = curr->next;
+
+            }else{
+
+                curr->next = NULL;
+
+            }
         }
 
-        if(i + 1 < pages_needed){
+        curr_toy_page = first_page;
 
-            curr->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
-            if(!curr->next)
-                return NULL;
-
-            curr = curr->next;
-
-        }else{
-
-            curr->next = NULL;
-
-        }
     }
 
-    curr_toy_page = first_page;
-
-}
-
     struct page **pages;
-    struct toy_pages_list *tmp = saved_l;
+    temp_node = saved_l;
 
     pages = (struct page**)kmalloc_array(pages_needed, sizeof(*pages), GFP_KERNEL);
 
+    //Add the pages to the array for vmap
     for(int i = 0; i < pages_needed; i++){
 
-        if(tmp->page->page_mapped &&
+        if(temp_node->page->page_mapped &&
              m_pages_flag){
 
-            kunmap_local(tmp->page->kaddr);
-            tmp->page->page_mapped = 0;
+            kunmap_local(temp_node->page->kaddr);
+            temp_node->page->page_mapped = 0;
         }
 
-        pages[i] = tmp->page->page;
-        tmp = tmp->next;
+        pages[i] = temp_node->page->page;
+        temp_node = temp_node->next;
     }
 
 
     void *kaddr = saved_l->page->kaddr;
 
-    tmp = saved_l;
+    temp_node = saved_l;
 
-    
-
+    //If not mapped already
     if (!saved_l->page->page_mapped || !saved_l->page->kaddr){
+
         kaddr = vmap(pages, pages_needed, VM_MAP, PAGE_KERNEL);
 
         for(int i = 0; i < pages_needed; i++){
-            tmp->page->page_mapped = 1;
-            tmp->page->kaddr = kaddr + i * PAGE_SIZE;
 
-            tmp = tmp->next;
+            temp_node->page->page_mapped = 1;
+            temp_node->page->kaddr = kaddr + i * PAGE_SIZE;
+
+            temp_node = temp_node->next;
         }
 
     }
