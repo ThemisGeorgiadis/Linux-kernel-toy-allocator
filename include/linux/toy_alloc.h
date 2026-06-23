@@ -25,6 +25,10 @@ struct toy_page{
     unsigned int obj_available[OBJS_PER_PAGE];
     unsigned int obj_alloc_length[OBJS_PER_PAGE];
 
+    //Future use
+    unsigned int obj_count;
+    unsigned int **obj_alloc_length_bytes; //obj_alloc_length_bytes[obj_count]
+
 };
 
 struct toy_pages_list{
@@ -41,6 +45,10 @@ struct toy_alloc_metadata{
 } t_alloc_metadata;
 
 int toy_allocator_initialized = 0;
+
+void toy_alloc_internal_init(void);
+int check_internal_page_array(void);
+void* toy_alloc_internal(size_t size);
 
 unsigned long calc_size(size_t size, size_t max_size);
 

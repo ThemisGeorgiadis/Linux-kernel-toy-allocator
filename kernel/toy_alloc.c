@@ -1,9 +1,87 @@
 #include <linux/toy_alloc.h>
 
+struct page** internal_pages;
+//Current index of internal_pages , current offset of the current page inside internal_pages
+unsigned long internal_pages_count = -1, internal_page_offset = 0 ;
+void* current_internal_kaddr = NULL;
+
+
+//Current byte offset of internal_pages 2d array
+unsigned long internal_page_array_offset=0;
+
+
+void toy_alloc_internal_init(void){
+
+    struct page* tmp_page = alloc_page( GFP_KERNEL);
+    internal_pages = (struct page**)kmap_local_page(tmp_page);
+
+}
+
+
+int check_internal_page_array(void){
+
+    if(!internal_pages){
+        pr_err("TOY ALLOC INTERNALS NOT INITIALIZED\n");
+        return 0;
+    }
+        
+
+    if(internal_pages + internal_page_array_offset + sizeof(struct page) > internal_pages + PAGE_SIZE){
+
+        struct page* tmp_page = alloc_page( GFP_KERNEL);
+
+        if(!tmp_page)
+            return 0;
+
+        internal_pages = (struct page**)kmap_local_page(tmp_page);
+
+        internal_page_array_offset = 0;
+        internal_pages_count = -1;
+
+        return 1;
+    }
+
+    internal_page_array_offset += sizeof(struct page);
+    return 1;
+}
+
+
+
+void* toy_alloc_internal(size_t size){
+
+    size = ALIGN(size, sizeof(void *));
+
+    int ret = check_internal_page_array();
+
+    if(!ret)
+        return NULL;
+
+    if(!current_internal_kaddr ||
+        (current_internal_kaddr &&
+            current_internal_kaddr + internal_page_offset + size > current_internal_kaddr + PAGE_SIZE)){
+
+            ++internal_pages_count;
+            internal_page_offset = 0;
+            internal_pages[internal_pages_count] = alloc_page( GFP_KERNEL);
+
+            if (!internal_pages[internal_pages_count])
+                return NULL;
+
+
+            current_internal_kaddr = kmap_local_page(internal_pages[internal_pages_count]);
+
+    }
+
+    unsigned long tmp = internal_page_offset;
+    internal_page_offset +=size;
+    
+    return current_internal_kaddr + tmp;
+
+}
 
 struct toy_page* new_toy_page(){
 
-    struct toy_page *toypage = kmalloc(sizeof(struct toy_page), GFP_KERNEL);
+    struct toy_page *toypage = toy_alloc_internal(sizeof(struct toy_page));
     if (!toypage)
         return NULL;
 
@@ -22,6 +100,8 @@ struct toy_page* new_toy_page(){
 }
 
 void init_toy_allocator(void){
+
+    toy_alloc_internal_init();
 
     t_alloc_metadata.head = NULL;
     t_alloc_metadata.toy_pages_count = 0;
@@ -181,7 +261,7 @@ struct toy_page *allocate_new_pages(struct toy_pages_list *curr_page_l,
 
         if (i + 1 < pages_needed) {
 
-            curr_page_l->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+            curr_page_l->next = toy_alloc_internal(sizeof(struct toy_pages_list));
 
             if (!curr_page_l->next)
                 return NULL;
@@ -272,6 +352,7 @@ void* toy_alloc(size_t size){
     struct toy_pages_list *prev_page_l = NULL;
     struct toy_pages_list *saved_l = NULL;
     struct toy_pages_list *temp_node = NULL;
+
     struct toy_page *curr_toy_page;
     struct toy_page *first_page;
     size_t objects_needed;
@@ -357,6 +438,7 @@ void* toy_alloc(size_t size){
 
             curr_page_l = temp_node;
             curr_toy_page = curr_page_l->page;
+            
             curr_obj_sz_sum = 0;
             remaining = objects_needed;
 
@@ -393,15 +475,10 @@ void* toy_alloc(size_t size){
             
         }
 
-        curr_obj_sz_sum = 0;
-        remaining = objects_needed;
-        flag = 1;
-
         //No free, already allocated, pages found -> allocate new ones
         if (!allocated) {
 
-            prev_page_l->next =
-                kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+            prev_page_l->next = toy_alloc_internal(sizeof(struct toy_pages_list));
 
             if (!prev_page_l->next)
                 return NULL;
@@ -419,7 +496,7 @@ void* toy_alloc(size_t size){
     //No pages allocated from buddy yet
     }else {
 
-        t_alloc_metadata.head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+        t_alloc_metadata.head = toy_alloc_internal(sizeof(struct toy_pages_list));
 
         if (!t_alloc_metadata.head)
             return NULL;
@@ -503,16 +580,11 @@ void print_toy_allocator_state(void)
 
             if (p->obj_alloc_length[i]) {
                 pr_info("    [%02d] %px -> %s allocation size: %u objects == %u bytes\n",
-                       i,
-                       obj_addr,
-                       p->obj_available[i] ? "FREE" : "USED",
-                       p->obj_alloc_length[i],
-                       p->obj_alloc_length[i] * OBJ_SIZE);
+                       i, obj_addr, p->obj_available[i] ? "FREE" : "USED",
+                       p->obj_alloc_length[i], p->obj_alloc_length[i] * OBJ_SIZE);
             } else {
                 pr_info("    [%02d] %px -> %s\n",
-                       i,
-                       obj_addr,
-                       p->obj_available[i] ? "FREE" : "USED");
+                       i, obj_addr, p->obj_available[i] ? "FREE" : "USED");
             }
             
         }
@@ -527,7 +599,10 @@ void print_toy_allocator_state(void)
 
 SYSCALL_DEFINE2(toy_alloc, unsigned int, val, unsigned int, size){
 
+    
+
     if(!toy_allocator_initialized){
+
         init_toy_allocator();
     }
 
