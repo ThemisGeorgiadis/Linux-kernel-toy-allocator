@@ -7,6 +7,8 @@
 #include <linux/highmem.h>
 #include <linux/types.h>
 #include <linux/vmalloc.h>
+#include <linux/mutex.h>
+#include <linux/kthread.h>
 
 #define OBJ_SIZE 128
 #define OBJS_PER_PAGE (PAGE_SIZE/OBJ_SIZE)

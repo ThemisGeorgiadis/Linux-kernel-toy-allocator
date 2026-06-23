@@ -5,6 +5,11 @@ struct page** internal_pages;
 unsigned long internal_pages_count = -1, internal_page_offset = 0 ;
 void* current_internal_kaddr = NULL;
 
+<<<<<<< Updated upstream
+=======
+static DEFINE_MUTEX(toy_alloc_lock);
+
+>>>>>>> Stashed changes
 
 //Current byte offset of internal_pages 2d array
 unsigned long internal_page_array_offset=0;
@@ -13,7 +18,11 @@ unsigned long internal_page_array_offset=0;
 void toy_alloc_internal_init(void){
 
     struct page* tmp_page = alloc_page( GFP_KERNEL);
+<<<<<<< Updated upstream
     internal_pages = (struct page**)kmap_local_page(tmp_page);
+=======
+    internal_pages = (struct page**)page_address(tmp_page);
+>>>>>>> Stashed changes
 
 }
 
@@ -26,14 +35,22 @@ int check_internal_page_array(void){
     }
         
 
+<<<<<<< Updated upstream
     if(internal_pages + internal_page_array_offset + sizeof(struct page) > internal_pages + PAGE_SIZE){
+=======
+    if(internal_pages + internal_page_array_offset + sizeof(struct page*) > internal_pages + PAGE_SIZE){
+>>>>>>> Stashed changes
 
         struct page* tmp_page = alloc_page( GFP_KERNEL);
 
         if(!tmp_page)
             return 0;
 
+<<<<<<< Updated upstream
         internal_pages = (struct page**)kmap_local_page(tmp_page);
+=======
+        internal_pages = (struct page**)page_address(tmp_page);
+>>>>>>> Stashed changes
 
         internal_page_array_offset = 0;
         internal_pages_count = -1;
@@ -68,7 +85,11 @@ void* toy_alloc_internal(size_t size){
                 return NULL;
 
 
+<<<<<<< Updated upstream
             current_internal_kaddr = kmap_local_page(internal_pages[internal_pages_count]);
+=======
+            current_internal_kaddr = page_address(internal_pages[internal_pages_count]);
+>>>>>>> Stashed changes
 
     }
 
@@ -220,6 +241,8 @@ unsigned long check_page_continuity(struct toy_pages_list *curr_page_l, size_t s
             return -1;
 }
 
+
+
 struct toy_page *allocate_new_pages(struct toy_pages_list *curr_page_l,
      unsigned long pages_needed, size_t objects_needed, struct toy_pages_list **saved_l){
 
@@ -279,8 +302,12 @@ struct toy_page *allocate_new_pages(struct toy_pages_list *curr_page_l,
 
 void toy_free(void* ptr){
 
-    if(!t_alloc_metadata.toy_pages_count)
+    mutex_lock(&toy_alloc_lock);
+
+    if(!t_alloc_metadata.toy_pages_count){
+        mutex_unlock(&toy_alloc_lock);
         return;
+    }
 
     struct toy_pages_list * curr_page_l = t_alloc_metadata.head;
 
@@ -329,6 +356,8 @@ void toy_free(void* ptr){
         
     }
 
+    mutex_unlock(&toy_alloc_lock);
+
 }
 
 /*
@@ -340,6 +369,11 @@ void toy_free(void* ptr){
 */
 
 void* toy_alloc(size_t size){
+
+    if(!size)
+        return NULL;
+
+    mutex_lock(&toy_alloc_lock);
 
     //NEED MULTIPLE PAGES FLAG
     int m_pages_flag = 0, flag = 1;
@@ -357,9 +391,6 @@ void* toy_alloc(size_t size){
     struct toy_page *first_page;
     size_t objects_needed;
 
-    if(!size)
-        return NULL;
-
     if(size > PAGE_SIZE){
 
         m_pages_flag = 1;
@@ -371,7 +402,7 @@ void* toy_alloc(size_t size){
 
 
     //check if we could we could possibly fit the allocation in already allocated pages
-    if(t_alloc_metadata.toy_pages_count >= pages_needed){
+    if(t_alloc_metadata.toy_pages_count){
 
         curr_page_l = t_alloc_metadata.head;
 
@@ -415,6 +446,9 @@ void* toy_alloc(size_t size){
 
             //Mark the allocated objects
             for(int i = 0; i<pages_needed; i++){
+                if (!curr_page_l) {
+                    break; 
+                }
 
                 if(remaining > OBJS_PER_PAGE){
 
@@ -453,6 +487,10 @@ void* toy_alloc(size_t size){
 
             for(int i = 0; i<pages_needed; i++){
 
+                if (!temp_node) { // Safety Check
+                    break;
+                }
+
                if(remaining > OBJS_PER_PAGE){
 
                    remaining -= OBJS_PER_PAGE;
@@ -480,15 +518,19 @@ void* toy_alloc(size_t size){
 
             prev_page_l->next = toy_alloc_internal(sizeof(struct toy_pages_list));
 
-            if (!prev_page_l->next)
+            if (!prev_page_l->next){
+                mutex_unlock(&toy_alloc_lock);
                 return NULL;
+            }
 
             prev_page_l->next->next = NULL;
 
             first_page = allocate_new_pages(prev_page_l->next, pages_needed, objects_needed, &saved_l);
             
-            if (!first_page)
+            if (!first_page){
+                mutex_unlock(&toy_alloc_lock);
                 return NULL;
+            }
             
             curr_toy_page = first_page;
         }
@@ -498,13 +540,17 @@ void* toy_alloc(size_t size){
 
         t_alloc_metadata.head = toy_alloc_internal(sizeof(struct toy_pages_list));
 
-        if (!t_alloc_metadata.head)
+        if (!t_alloc_metadata.head){
+            mutex_unlock(&toy_alloc_lock);
             return NULL;
+        }
 
         first_page = allocate_new_pages(t_alloc_metadata.head, pages_needed, objects_needed, &saved_l);
 
-        if (!first_page)
+        if (!first_page){
+            mutex_unlock(&toy_alloc_lock);
             return NULL;
+        }
 
         curr_toy_page = first_page;
     }
@@ -514,13 +560,17 @@ void* toy_alloc(size_t size){
 
     pages = (struct page**)kmalloc_array(pages_needed, sizeof(*pages), GFP_KERNEL);
 
+    if(!pages){
+        mutex_unlock(&toy_alloc_lock);
+        return NULL;
+    }
+
     //Add the pages to the array for vmap
     for(int i = 0; i < pages_needed; i++){
 
         if(temp_node->page->page_mapped &&
              m_pages_flag){
 
-            kunmap_local(temp_node->page->kaddr);
             temp_node->page->page_mapped = 0;
         }
 
@@ -547,6 +597,10 @@ void* toy_alloc(size_t size){
         }
 
     }
+
+    kfree(pages);
+
+    mutex_unlock(&toy_alloc_lock);
 
     return (void *)((char *)kaddr + page_offset * OBJ_SIZE);
 
@@ -613,18 +667,18 @@ SYSCALL_DEFINE2(toy_alloc, unsigned int, val, unsigned int, size){
     //pr_info("value: %d\n",*integer);
 
     int *integer1 = (int*)toy_alloc(2*PAGE_SIZE);
-    int *integer2 = (int*)toy_alloc(PAGE_SIZE);
+    int *integer2 = (int*)toy_alloc(2*PAGE_SIZE);
 
     print_toy_allocator_state();
 
-    toy_free((void*)integer1);
+   toy_free((void*)integer1);
 
-    integer1 = (int*)toy_alloc(2*PAGE_SIZE - PAGE_SIZE/2);
+   integer1 = (int*)toy_alloc(2*PAGE_SIZE - PAGE_SIZE/2);
 
-    print_toy_allocator_state();
+   print_toy_allocator_state();
 
-    int *integer3 = (int*)toy_alloc(PAGE_SIZE/3);
-    int *integer4 = (int*)toy_alloc(PAGE_SIZE/3);
+   int *integer3 = (int*)toy_alloc(PAGE_SIZE/3);
+   int *integer4 = (int*)toy_alloc(10 * PAGE_SIZE);
 
     print_toy_allocator_state();
 
