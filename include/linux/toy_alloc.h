@@ -44,6 +44,9 @@ int toy_allocator_initialized = 0;
 
 unsigned long calc_size(size_t size, size_t max_size);
 
+struct toy_page *allocate_new_pages(struct toy_pages_list *curr_page_l,
+     unsigned long pages_needed, size_t objects_needed, struct toy_pages_list **saved_l);
+
 struct toy_page* new_toy_page(void);
 
 void init_toy_allocator(void);

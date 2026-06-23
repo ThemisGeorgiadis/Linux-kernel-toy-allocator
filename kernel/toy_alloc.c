@@ -140,6 +140,63 @@ unsigned long check_page_continuity(struct toy_pages_list *curr_page_l, size_t s
             return -1;
 }
 
+struct toy_page *allocate_new_pages(struct toy_pages_list *curr_page_l,
+     unsigned long pages_needed, size_t objects_needed, struct toy_pages_list **saved_l){
+
+    struct toy_page *curr_toy_page;
+    struct toy_page *first_page = NULL;
+
+    unsigned long remaining = objects_needed;
+    unsigned long curr_obj_sz_sum;
+    unsigned long page_offset;
+
+    for (int i = 0; i < pages_needed; i++) {
+
+        t_alloc_metadata.toy_pages_count++;
+
+        curr_page_l->page = new_toy_page();
+        curr_toy_page = curr_page_l->page;
+
+        if (i == 0) {
+            first_page = curr_toy_page;
+            *saved_l = curr_page_l;
+        }
+
+        if (remaining > OBJS_PER_PAGE) {
+            remaining -= OBJS_PER_PAGE;
+            curr_obj_sz_sum = OBJS_PER_PAGE;
+        } else {
+            curr_obj_sz_sum = remaining;
+        }
+
+        page_offset = mark_objects(&curr_toy_page, curr_obj_sz_sum, 0);
+
+        if ((long)page_offset != -1) {
+
+            if (i == 0)
+                curr_toy_page->obj_alloc_length[0] = objects_needed;
+
+            curr_toy_page->free_obj_cnt -= curr_obj_sz_sum;
+        }
+
+        if (i + 1 < pages_needed) {
+
+            curr_page_l->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+
+            if (!curr_page_l->next)
+                return NULL;
+
+            curr_page_l = curr_page_l->next;
+
+        } else {
+
+            curr_page_l->next = NULL;
+        }
+    }
+
+    return first_page;
+}
+
 void toy_free(void* ptr){
 
     if(!t_alloc_metadata.toy_pages_count)
@@ -341,120 +398,38 @@ void* toy_alloc(size_t size){
         flag = 1;
 
         //No free, already allocated, pages found -> allocate new ones
-        if(!allocated){ //!curr_page_l &&
+        if (!allocated) {
+
+            prev_page_l->next =
+                kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
+
+            if (!prev_page_l->next)
+                return NULL;
+
+            prev_page_l->next->next = NULL;
+
+            first_page = allocate_new_pages(prev_page_l->next, pages_needed, objects_needed, &saved_l);
             
-            for(int i = 0; i<pages_needed; i++){
-
-                prev_page_l->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
-
-                if (!prev_page_l->next)
-                    return NULL;
-
-                prev_page_l->next->next = NULL;
-                t_alloc_metadata.toy_pages_count++;
-                curr_page_l = prev_page_l->next;
-
-                curr_page_l->page = new_toy_page();
-                curr_toy_page = curr_page_l->page;
-
-                if(flag){
-                    first_page = curr_toy_page;
-                    saved_l = curr_page_l;
-                }
-
-                if(remaining > OBJS_PER_PAGE){
-                    remaining -= OBJS_PER_PAGE;
-                    curr_obj_sz_sum = OBJS_PER_PAGE;
-                }else
-                    curr_obj_sz_sum = remaining;
-
-                page_offset = mark_objects(&curr_toy_page,curr_obj_sz_sum,0);
-
-                if (((long)page_offset) != -1){
-
-                    if(flag){
-                        curr_toy_page->obj_alloc_length[0] = objects_needed;
-                        flag = 0;
-                    }
-
-                    curr_toy_page->free_obj_cnt -= curr_obj_sz_sum;
-
-                }
-
-                prev_page_l = curr_page_l;
-
-            }
-
+            if (!first_page)
+                return NULL;
+            
             curr_toy_page = first_page;
-
         }
 
     //No pages allocated from buddy yet
-    }else{
+    }else {
 
-        struct toy_pages_list *head;
-        struct toy_pages_list *curr;
-        
-        flag = 1;
-        remaining = objects_needed;
+        t_alloc_metadata.head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
 
-        head = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
-
-        if (!head)
+        if (!t_alloc_metadata.head)
             return NULL;
 
-        t_alloc_metadata.head = head;
-        curr = head;
+        first_page = allocate_new_pages(t_alloc_metadata.head, pages_needed, objects_needed, &saved_l);
 
-        for(int i = 0; i < pages_needed; i++){
-
-            curr->page = new_toy_page();
-
-            if(flag){
-                first_page = curr->page;
-                saved_l = curr;
-
-            }
-
-            curr_toy_page = curr->page;
-            t_alloc_metadata.toy_pages_count++;
-
-            if(remaining > OBJS_PER_PAGE){
-                remaining -= OBJS_PER_PAGE;
-                curr_obj_sz_sum = OBJS_PER_PAGE;
-            }else{
-                curr_obj_sz_sum = remaining;
-            }
-
-            page_offset = mark_objects(&curr_toy_page, curr_obj_sz_sum, 0);
-
-            if(((long)page_offset) != -1){
-
-                if(flag){
-                    curr_toy_page->obj_alloc_length[0] = objects_needed;
-                    flag = 0;
-                }
-
-                curr_toy_page->free_obj_cnt -= curr_obj_sz_sum;
-            }
-
-            if(i + 1 < pages_needed){
-
-                curr->next = kmalloc(sizeof(struct toy_pages_list), GFP_KERNEL);
-                if(!curr->next)
-                    return NULL;
-
-                curr = curr->next;
-
-            }else{
-
-                curr->next = NULL;
-
-            }
-        }
+        if (!first_page)
+            return NULL;
 
         curr_toy_page = first_page;
-
     }
 
     struct page **pages;
