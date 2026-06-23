@@ -94,7 +94,7 @@ void toy_free(void* ptr){
     struct toy_pages_list * curr_page_l = t_alloc_metadata.head;
 
     while(curr_page_l){
-        //printk("%px - %px : %px\n", curr_page_l->page->kaddr, curr_page_l->page->kaddr + PAGE_SIZE, ptr);
+        //pr_info("%px - %px : %px\n", curr_page_l->page->kaddr, curr_page_l->page->kaddr + PAGE_SIZE, ptr);
         if(ptr >= curr_page_l->page->kaddr && ptr < curr_page_l->page->kaddr + PAGE_SIZE){
             break;
         }
@@ -477,33 +477,34 @@ void print_toy_allocator_state(void)
     struct toy_pages_list *curr = t_alloc_metadata.head;
     int page_idx = 0;
 
-    printk(KERN_INFO "=== Toy Allocator State ===\n");
-    printk(KERN_INFO "Total pages: %u\n", t_alloc_metadata.toy_pages_count);
+    pr_info("=== Toy Allocator State ===\n");
+    pr_info("Total pages: %u\n", t_alloc_metadata.toy_pages_count);
 
     while (curr) {
 
         struct toy_page *p = curr->page;
 
-        printk(KERN_INFO "\n[Page %d]\n", page_idx);
-        printk(KERN_INFO "  page struct: %px\n", p->page);
-        printk(KERN_INFO "  mapped: %u\n", p->page_mapped);
-        printk(KERN_INFO "  free_obj_cnt: %u\n", p->free_obj_cnt);
-        printk(KERN_INFO "  kaddr: %px\n", p->kaddr);
+        pr_info("\n[Page %d]\n", page_idx);
+        pr_info("  page struct: %px\n", p->page);
+        pr_info("  mapped: %u\n", p->page_mapped);
+        pr_info("  free_obj_cnt: %u\n", p->free_obj_cnt);
+        pr_info("  kaddr: %px\n", p->kaddr);
 
-        printk(KERN_INFO "  objects:\n");
+        pr_info("  objects:\n");
 
         for (int i = 0; i < OBJS_PER_PAGE; i++) {
 
             void *obj_addr = (void *)((char *)p->kaddr + i * OBJ_SIZE);
 
             if (p->obj_alloc_length[i]) {
-                printk(KERN_INFO "    [%02d] %px -> %s allocation size: %u\n",
+                pr_info("    [%02d] %px -> %s allocation size: %u objects == %u bytes\n",
                        i,
                        obj_addr,
                        p->obj_available[i] ? "FREE" : "USED",
-                       p->obj_alloc_length[i]);
+                       p->obj_alloc_length[i],
+                       p->obj_alloc_length[i] * OBJ_SIZE);
             } else {
-                printk(KERN_INFO "    [%02d] %px -> %s\n",
+                pr_info("    [%02d] %px -> %s\n",
                        i,
                        obj_addr,
                        p->obj_available[i] ? "FREE" : "USED");
@@ -515,11 +516,11 @@ void print_toy_allocator_state(void)
         page_idx++;
     }
 
-    printk(KERN_INFO "=== End State ===\n");
+    pr_info("=== End State ===\n");
 }
 
 
-SYSCALL_DEFINE2(taskinspect, unsigned int, val, unsigned int, size){
+SYSCALL_DEFINE2(toy_alloc, unsigned int, val, unsigned int, size){
 
     if(!toy_allocator_initialized){
         init_toy_allocator();

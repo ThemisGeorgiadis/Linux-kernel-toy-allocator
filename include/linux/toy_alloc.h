@@ -8,7 +8,7 @@
 #include <linux/types.h>
 #include <linux/vmalloc.h>
 
-#define OBJ_SIZE 64
+#define OBJ_SIZE 32
 #define OBJS_PER_PAGE (PAGE_SIZE/OBJ_SIZE)
 
 
