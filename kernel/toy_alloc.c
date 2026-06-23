@@ -58,15 +58,26 @@ unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_neede
     return page_offset;
 }
 
+unsigned long calc_size(size_t size, size_t max_size ){
 
-unsigned long check_continuity(struct toy_page **curr_toy_page, size_t objects_needed)
+    unsigned long tmp = size/max_size;
+
+    if(size%max_size == 0)
+        tmp--;
+
+    return tmp;
+    
+}
+
+//Find contiguous objects inside the page. size in objects
+unsigned long check_obj_continuity(struct toy_page *curr_toy_page, size_t objects_needed)
 {
     size_t run = 0;
     unsigned long start = 0;
 
     for (int i = 0; i < OBJS_PER_PAGE; i++) {
 
-        if ((*curr_toy_page)->obj_available[i]) {
+        if (curr_toy_page->obj_available[i]) {
 
             if (run == 0)
                 start = i;
@@ -84,6 +95,49 @@ unsigned long check_continuity(struct toy_page **curr_toy_page, size_t objects_n
     }
 
     return -1;
+}
+
+//Find contiguous pages. size in bytes
+unsigned long check_page_continuity(struct toy_pages_list *curr_page_l, size_t size){
+
+    unsigned long curr_obj_sz_sum = 0;
+    struct toy_pages_list *temp_node = NULL;
+    struct toy_page *curr_toy_page = curr_page_l->page;
+
+    if(curr_toy_page->free_obj_cnt < OBJS_PER_PAGE){
+
+                curr_page_l = curr_page_l->next;
+                return -1;
+
+            //If size fits check the next page
+            }else {
+
+                curr_obj_sz_sum += PAGE_SIZE;
+                temp_node = curr_page_l->next;
+
+                while(temp_node){
+
+                    //We need contiguous, completely free pages
+                    if(temp_node->page &&
+                        temp_node->page->free_obj_cnt < OBJS_PER_PAGE)
+                    {
+
+                        return -1;
+
+                    }else{
+
+                        curr_obj_sz_sum += PAGE_SIZE;
+
+                        if(curr_obj_sz_sum >= size)
+                            return curr_obj_sz_sum;
+
+                        temp_node = temp_node->next;
+                    }
+                }
+
+            }
+
+            return -1;
 }
 
 void toy_free(void* ptr){
@@ -140,6 +194,14 @@ void toy_free(void* ptr){
 
 }
 
+/*
+    Should add flags to toy_alloc
+    object size for current page??
+    switch to dynamic object sizes? -> less fragmentation
+
+
+*/
+
 void* toy_alloc(size_t size){
 
     //NEED MULTIPLE PAGES FLAG
@@ -161,17 +223,13 @@ void* toy_alloc(size_t size){
         return NULL;
 
     if(size > PAGE_SIZE){
-        m_pages_flag = 1;   
-        pages_needed = size/PAGE_SIZE + 1;
 
-        if(size%PAGE_SIZE == 0)
-            pages_needed--;
+        m_pages_flag = 1;
+        pages_needed = calc_size(size, PAGE_SIZE);
+
     }
 
-
-    objects_needed = size/OBJ_SIZE + 1;
-    if(size%OBJ_SIZE == 0)
-        objects_needed--;
+    objects_needed = calc_size(size, OBJ_SIZE);
 
 
     //check if we could we could possibly fit the allocation in already allocated pages
@@ -185,46 +243,10 @@ void* toy_alloc(size_t size){
             prev_page_l = curr_page_l;
             curr_toy_page = curr_page_l->page;
 
-            curr_obj_sz_sum = 0;
-
-            //If size doesnt fit skip to the next page
-            if(m_pages_flag && curr_toy_page->free_obj_cnt < OBJS_PER_PAGE){
-
-                curr_page_l = curr_page_l->next;
-                continue;
-
-            //If size fits check the next page
-            }else if(m_pages_flag){
-
-                curr_obj_sz_sum += PAGE_SIZE;
-                temp_node = curr_page_l->next;
-
-                while(temp_node){
-
-                    //We need contiguous, completely free pages
-                    if(temp_node->page &&
-                        temp_node->page->free_obj_cnt < OBJS_PER_PAGE)
-                    {
-
-                        curr_page_l = curr_page_l->next;
-                        break;
-
-                    }else{
-
-                        curr_obj_sz_sum += PAGE_SIZE;
-
-                        if(curr_obj_sz_sum >= size)
-                            break;
-
-                        temp_node = temp_node->next;
-                    }
-                }
-
-            }
-
-            //Check if we found contiguous allocation area
+            //Check if we have a contiguous allocation area
             if(!m_pages_flag){
-                start_obj = check_continuity(&curr_toy_page,objects_needed);
+
+                start_obj = check_obj_continuity(curr_toy_page,objects_needed);
 
                 if(!(curr_toy_page->free_obj_cnt >= objects_needed &&
                      start_obj != -1)){
@@ -235,25 +257,32 @@ void* toy_alloc(size_t size){
                 }
 
             }else{
+
+                curr_obj_sz_sum = check_page_continuity(curr_page_l, size);
                 
                 //Failed to find contiguous, completely free pages
-                if(!(curr_obj_sz_sum >= size)){
+                if(!((long)curr_obj_sz_sum >= (long)size)){
                     curr_page_l = curr_page_l->next;
                     continue;
                 }
                     
             }
 
+            //IF WE REACH THIS POINT WE HAVE A VALID MEMORY AREA
+
             temp_node = curr_page_l;
             curr_obj_sz_sum = 0;
             remaining = objects_needed;
             flag = 1;
 
+            //Mark the allocated objects
             for(int i = 0; i<pages_needed; i++){
 
                 if(remaining > OBJS_PER_PAGE){
+
                     remaining -= OBJS_PER_PAGE;
                     curr_obj_sz_sum = OBJS_PER_PAGE;
+
                 }else
                     curr_obj_sz_sum = remaining;
 
@@ -271,39 +300,40 @@ void* toy_alloc(size_t size){
 
             curr_page_l = temp_node;
             curr_toy_page = curr_page_l->page;
-            
             curr_obj_sz_sum = 0;
             remaining = objects_needed;
 
             if (((long)page_offset) != -1){
 
-                curr_toy_page->obj_alloc_length[page_offset] = objects_needed;
-
-                 for(int i = 0; i<pages_needed; i++){
-
-                    if(remaining > OBJS_PER_PAGE){
-
-                        remaining -= OBJS_PER_PAGE;
-                        curr_obj_sz_sum = OBJS_PER_PAGE;
-
-                        temp_node->page->free_obj_cnt -= curr_obj_sz_sum;
-
-                    }else{
-
-                        allocated = 1;
-                        curr_obj_sz_sum = remaining;
-                        temp_node->page->free_obj_cnt -= curr_obj_sz_sum;
-                    }
-
-                    temp_node = temp_node->next;
-
-                 }
-
-                break;
+                curr_page_l = curr_page_l->next;
+                continue;
             }
 
-            curr_page_l = curr_page_l->next;
+            //Save the allocated size in objects
+            curr_toy_page->obj_alloc_length[page_offset] = objects_needed;
 
+            for(int i = 0; i<pages_needed; i++){
+
+               if(remaining > OBJS_PER_PAGE){
+
+                   remaining -= OBJS_PER_PAGE;
+                   curr_obj_sz_sum = OBJS_PER_PAGE;
+
+                   temp_node->page->free_obj_cnt -= curr_obj_sz_sum;
+
+               }else{
+
+                   allocated = 1;
+                   curr_obj_sz_sum = remaining;
+                   temp_node->page->free_obj_cnt -= curr_obj_sz_sum;
+               }
+
+               temp_node = temp_node->next;
+
+            }
+
+            break;
+            
         }
 
         curr_obj_sz_sum = 0;
@@ -539,10 +569,12 @@ SYSCALL_DEFINE2(toy_alloc, unsigned int, val, unsigned int, size){
 
     toy_free((void*)integer1);
 
+    integer1 = (int*)toy_alloc(2*PAGE_SIZE - PAGE_SIZE/2);
+
     print_toy_allocator_state();
 
-    int *integer3 = (int*)toy_alloc(PAGE_SIZE/2);
-    int *integer4 = (int*)toy_alloc(PAGE_SIZE/2);
+    int *integer3 = (int*)toy_alloc(PAGE_SIZE/3);
+    int *integer4 = (int*)toy_alloc(PAGE_SIZE/3);
 
     print_toy_allocator_state();
 

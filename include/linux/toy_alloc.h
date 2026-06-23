@@ -8,7 +8,7 @@
 #include <linux/types.h>
 #include <linux/vmalloc.h>
 
-#define OBJ_SIZE 32
+#define OBJ_SIZE 128
 #define OBJS_PER_PAGE (PAGE_SIZE/OBJ_SIZE)
 
 
@@ -50,7 +50,9 @@ void* toy_alloc(size_t size);
 
 unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_needed, unsigned long start_obj);
 
-unsigned long check_continuity(struct toy_page **curr_toy_page, size_t objects_needed);
+unsigned long check_obj_continuity(struct toy_page *curr_toy_page, size_t objects_needed);
+
+unsigned long check_page_continuity(struct toy_pages_list *curr_page_l, size_t size);
 
 void toy_free(void* ptr);
 
