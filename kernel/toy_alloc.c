@@ -5,11 +5,8 @@ struct page** internal_pages;
 unsigned long internal_pages_count = -1, internal_page_offset = 0 ;
 void* current_internal_kaddr = NULL;
 
-<<<<<<< Updated upstream
-=======
 static DEFINE_MUTEX(toy_alloc_lock);
 
->>>>>>> Stashed changes
 
 //Current byte offset of internal_pages 2d array
 unsigned long internal_page_array_offset=0;
@@ -18,11 +15,7 @@ unsigned long internal_page_array_offset=0;
 void toy_alloc_internal_init(void){
 
     struct page* tmp_page = alloc_page( GFP_KERNEL);
-<<<<<<< Updated upstream
-    internal_pages = (struct page**)kmap_local_page(tmp_page);
-=======
     internal_pages = (struct page**)page_address(tmp_page);
->>>>>>> Stashed changes
 
 }
 
@@ -35,22 +28,14 @@ int check_internal_page_array(void){
     }
         
 
-<<<<<<< Updated upstream
-    if(internal_pages + internal_page_array_offset + sizeof(struct page) > internal_pages + PAGE_SIZE){
-=======
     if(internal_pages + internal_page_array_offset + sizeof(struct page*) > internal_pages + PAGE_SIZE){
->>>>>>> Stashed changes
 
         struct page* tmp_page = alloc_page( GFP_KERNEL);
 
         if(!tmp_page)
             return 0;
 
-<<<<<<< Updated upstream
-        internal_pages = (struct page**)kmap_local_page(tmp_page);
-=======
         internal_pages = (struct page**)page_address(tmp_page);
->>>>>>> Stashed changes
 
         internal_page_array_offset = 0;
         internal_pages_count = -1;
@@ -85,11 +70,7 @@ void* toy_alloc_internal(size_t size){
                 return NULL;
 
 
-<<<<<<< Updated upstream
-            current_internal_kaddr = kmap_local_page(internal_pages[internal_pages_count]);
-=======
             current_internal_kaddr = page_address(internal_pages[internal_pages_count]);
->>>>>>> Stashed changes
 
     }
 
