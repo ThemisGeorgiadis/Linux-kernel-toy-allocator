@@ -60,7 +60,7 @@ unsigned long mark_objects(struct toy_page **curr_toy_page, size_t objects_neede
 
 unsigned long calc_size(size_t size, size_t max_size ){
 
-    unsigned long tmp = size/max_size;
+    unsigned long tmp = size/max_size + 1;
 
     if(size%max_size == 0)
         tmp--;
@@ -303,7 +303,7 @@ void* toy_alloc(size_t size){
             curr_obj_sz_sum = 0;
             remaining = objects_needed;
 
-            if (((long)page_offset) != -1){
+            if (((long)page_offset) == -1){
 
                 curr_page_l = curr_page_l->next;
                 continue;

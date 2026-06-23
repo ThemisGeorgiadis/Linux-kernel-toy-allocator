@@ -42,6 +42,8 @@ struct toy_alloc_metadata{
 
 int toy_allocator_initialized = 0;
 
+unsigned long calc_size(size_t size, size_t max_size);
+
 struct toy_page* new_toy_page(void);
 
 void init_toy_allocator(void);
